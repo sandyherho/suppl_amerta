@@ -1,13 +1,11 @@
 #!/usr/bin/env python
-"""Phase-space (h, u) trajectories and Riemann-invariant clustering.
+"""Phase-space (h, u) trajectories at the final time.
 
-Each Riemann solution traces specific curves in the conservative
-state space: 1- and 2-rarefaction integral curves preserve the
-Riemann invariants R_+ = u + 2*sqrt(g h) (right-going characteristics)
-and R_- = u - 2*sqrt(g h) (left-going characteristics) respectively;
-shocks lie on Hugoniot loci.  This script overlays the simulated
-state at the final time onto the analytical curves and shows the
-joint distribution of Riemann invariants across cases.
+Each panel scatters the simulated cells of one Riemann problem in the
+(h, u) state space and overlays the corresponding analytical
+1-rarefaction / 1-shock and 2-rarefaction / 2-shock curves through
+the left and right initial states.  Cross-case Riemann-invariant
+statistics R+, R- are reported in the stats file.
 
 Inputs : ../data/case_*.nc
 Outputs: ../figs/06_phase_space_riemann_invariants.{pdf,png,eps}
@@ -17,6 +15,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.lines import Line2D
 from netCDF4 import Dataset
 from scipy.optimize import brentq
 
@@ -38,8 +37,8 @@ CASES = [
      "label": "Double shock",       "color": "#d62728"},
 ]
 
-H_MIN_PHASE = 1.0e-3   # ignore near-floor cells when scattering (h, u)
-N_CURVE = 400          # samples for the analytical phase-space curves
+H_MIN_PHASE = 1.0e-3   # exclude near-floor cells from the (h, u) scatter
+N_CURVE = 400          # samples per analytical phase-space branch
 
 plt.rcParams.update({
     "font.family": "sans-serif",
@@ -69,27 +68,23 @@ def load_case(path):
 
 # --------------------------------------------------------- analytical curves
 def rarefaction_curve_1(hL, uL, h_grid, g):
-    """1-rarefaction: u = uL + 2*(c_L - c)  (R+ conserved)."""
     cL = np.sqrt(g * hL)
     return uL + 2.0 * (cL - np.sqrt(g * h_grid))
 
 
 def rarefaction_curve_2(hR, uR, h_grid, g):
-    """2-rarefaction: u = uR - 2*(c_R - c)  (R- conserved)."""
     cR = np.sqrt(g * hR)
     return uR - 2.0 * (cR - np.sqrt(g * h_grid))
 
 
-def shock_curve_2(hR, uR, h_grid, g):
-    """2-shock Hugoniot: u = uR + (h - hR) * sqrt(g*(h+hR)/(2*h*hR))."""
-    return uR + (h_grid - hR) * np.sqrt(
-        g * (h_grid + hR) / (2.0 * h_grid * hR))
-
-
 def shock_curve_1(hL, uL, h_grid, g):
-    """1-shock Hugoniot: u = uL - (h - hL) * sqrt(g*(h+hL)/(2*h*hL))."""
     return uL - (h_grid - hL) * np.sqrt(
         g * (h_grid + hL) / (2.0 * h_grid * hL))
+
+
+def shock_curve_2(hR, uR, h_grid, g):
+    return uR + (h_grid - hR) * np.sqrt(
+        g * (h_grid + hR) / (2.0 * h_grid * hR))
 
 
 # --------------------------------------------------------- star-state solvers
@@ -118,9 +113,7 @@ def double_rarefaction_star(h0, U, g):
     return max(c_star ** 2 / g, 0.0)
 
 
-# ------------------------------------------- analytical curves per Riemann ic
 def analytical_curves(case_key, d):
-    """Return list of (label, h_arr, u_arr) ready to plot."""
     g = d["g"]
     hL, hR = d["h_left"], d["h_right"]
     uL, uR = d["u_left"], d["u_right"]
@@ -142,8 +135,6 @@ def analytical_curves(case_key, d):
 
     elif case_key == "double_rarefaction":
         h_star = double_rarefaction_star(hL, abs(uL), g)
-        if h_star <= 0:
-            h_star = 1.0e-4
         h_lo = max(h_star, 1.0e-4)
         h1 = np.linspace(h_lo, hL, N_CURVE)
         h2 = np.linspace(h_lo, hR, N_CURVE)
@@ -163,7 +154,6 @@ def analytical_curves(case_key, d):
 
 
 def nearest_curve_distance(h_pts, u_pts, curves):
-    """Min distance from each (h, u) to the union of analytical curves."""
     if not curves:
         return np.full_like(h_pts, np.nan)
     all_h = np.concatenate([c[1] for c in curves])
@@ -176,54 +166,47 @@ def nearest_curve_distance(h_pts, u_pts, curves):
 
 # ------------------------------------------------------------------- plotting
 def plot_figure(data, outpath_stem):
-    fig = plt.figure(figsize=(11.0, 7.5))
+    fig = plt.figure(figsize=(10.0, 8.0))
     gs = fig.add_gridspec(
-        2, 3, left=0.07, right=0.985, top=0.97, bottom=0.08,
-        hspace=0.32, wspace=0.30,
+        2, 2, left=0.10, right=0.97, top=0.94, bottom=0.13,
+        hspace=0.42, wspace=0.30,
     )
-    axes = [fig.add_subplot(gs[0, 0]),
-            fig.add_subplot(gs[0, 1]),
-            fig.add_subplot(gs[1, 0]),
-            fig.add_subplot(gs[1, 1]),
-            fig.add_subplot(gs[:, 2])]
-    tags = ["(a)", "(b)", "(c)", "(d)", "(e)"]
+    positions = [(0, 0), (0, 1), (1, 0), (1, 1)]
+    tags = ["(a)", "(b)", "(c)", "(d)"]
 
-    # (a)-(d): per-case (h, u) scatter + analytical curves
-    for ax, tag, c in zip(axes[:4], tags[:4], CASES):
+    for tag, pos, c in zip(tags, positions, CASES):
+        ax = fig.add_subplot(gs[pos[0], pos[1]])
         d = data[c["key"]]
         h_pts = d["h"][-1]
         u_pts = d["u"][-1]
         m = h_pts > H_MIN_PHASE
-        ax.plot(h_pts[m], u_pts[m], "o", ms=2.0, mfc="none",
-                mec=c["color"], mew=0.6, label="numerical")
-        for name, h_arr, u_arr in analytical_curves(c["key"], d):
-            ax.plot(h_arr, u_arr, "k-", lw=1.0, alpha=0.85, label=name)
-        ax.axhline(0.0, color="k", lw=0.4, ls=":")
-        ax.set_xlabel(r"$h$ [m]")
-        ax.set_ylabel(r"$u$ [m s$^{-1}$]")
-        ax.text(0.03, 0.95, tag, transform=ax.transAxes,
-                fontsize=11, fontweight="bold", va="top")
-        ax.legend(loc="best", fontsize=7, frameon=False)
+        ax.plot(h_pts[m], u_pts[m], "o", ms=2.6, mfc="none",
+                mec=c["color"], mew=0.7)
+        for _, h_arr, u_arr in analytical_curves(c["key"], d):
+            ax.plot(h_arr, u_arr, color="k", lw=1.0, alpha=0.85)
+        ax.axhline(0.0, color="gray", lw=0.4, ls=":")
+        ax.set_xlabel(r"$h$  [m]")
+        ax.set_ylabel(r"$u$  [m s$^{-1}$]")
+        ax.set_title(tag, fontsize=11, fontweight="bold", pad=6)
         ax.grid(alpha=0.3)
 
-    # (e) (R+, R-) joint scatter for all cases
-    ax = axes[4]
-    for c in CASES:
-        d = data[c["key"]]
-        h_pts = d["h"][-1]
-        u_pts = d["u"][-1]
-        m = h_pts > H_MIN_PHASE
-        cL = np.sqrt(d["g"] * h_pts[m])
-        Rp = u_pts[m] + 2.0 * cL
-        Rm = u_pts[m] - 2.0 * cL
-        ax.plot(Rp, Rm, "o", ms=1.8, mfc="none",
-                mec=c["color"], mew=0.6, label=c["label"])
-    ax.set_xlabel(r"$R_+ = u + 2\sqrt{gh}$ [m s$^{-1}$]")
-    ax.set_ylabel(r"$R_- = u - 2\sqrt{gh}$ [m s$^{-1}$]")
-    ax.text(0.03, 0.95, tags[4], transform=ax.transAxes,
-            fontsize=11, fontweight="bold", va="top")
-    ax.legend(loc="best", fontsize=7, frameon=False)
-    ax.grid(alpha=0.3)
+    proxies = [
+        Line2D([0], [0], marker="o", color=CASES[0]["color"], lw=0,
+               mfc="none", mec=CASES[0]["color"], mew=0.9, ms=6,
+               label=CASES[0]["label"]),
+        Line2D([0], [0], marker="o", color=CASES[1]["color"], lw=0,
+               mfc="none", mec=CASES[1]["color"], mew=0.9, ms=6,
+               label=CASES[1]["label"]),
+        Line2D([0], [0], marker="o", color=CASES[2]["color"], lw=0,
+               mfc="none", mec=CASES[2]["color"], mew=0.9, ms=6,
+               label=CASES[2]["label"]),
+        Line2D([0], [0], marker="o", color=CASES[3]["color"], lw=0,
+               mfc="none", mec=CASES[3]["color"], mew=0.9, ms=6,
+               label=CASES[3]["label"]),
+        Line2D([0], [0], color="k", lw=1.4, label="Analytical curves"),
+    ]
+    fig.legend(handles=proxies, loc="lower center", ncol=5,
+               bbox_to_anchor=(0.5, 0.02), frameon=False, fontsize=10)
 
     for ext in ("pdf", "png", "eps"):
         fig.savefig(outpath_stem.with_suffix(f".{ext}"))
@@ -231,16 +214,44 @@ def plot_figure(data, outpath_stem):
 
 
 # ---------------------------------------------------------------------- stats
+def fmt(label, value, unit=""):
+    if isinstance(value, (int, np.integer)):
+        s = f"{int(value):>16d}"
+    elif isinstance(value, float):
+        if value != value:
+            s = f"{'NaN':>16}"
+        elif abs(value) >= 1e5 or (value != 0 and abs(value) < 1e-3):
+            s = f"{value:>16.6e}"
+        else:
+            s = f"{value:>16.6f}"
+    else:
+        s = f"{str(value):>16}"
+    return f"    {label:<46}{s}  {unit}".rstrip()
+
+
 def write_stats(data, outpath):
+    sep = "=" * 80
+    sub = "-" * 80
     lines = [
-        "=" * 72,
-        "Phase-space and Riemann-invariant diagnostics (at t_final)",
-        "=" * 72,
-        f"Cell filter : h > {H_MIN_PHASE:.2e} m",
-        f"Curve grid  : {N_CURVE} samples per analytical branch",
+        sep,
+        "  AMERTA v0.0.3  --  Phase-space and Riemann invariants",
+        sep,
+        "",
+        "  At t_final each cell is plotted in (h, u) state space and",
+        "  compared to the analytical wave curves emanating from the",
+        "  left and right initial states.  Riemann invariants",
+        "      R+ = u + 2 sqrt(g h)   (right-going characteristics)",
+        "      R- = u - 2 sqrt(g h)   (left-going characteristics)",
+        "  are conserved across the corresponding rarefaction fans.",
+        "",
+        sub,
+        "  CONFIGURATION",
+        sub,
+        fmt("Phase-space cell filter h >", H_MIN_PHASE, "m"),
+        fmt("Samples per analytical branch", N_CURVE),
         "",
     ]
-    for c in CASES:
+    for i, c in enumerate(CASES, 1):
         d = data[c["key"]]
         h_pts = d["h"][-1]
         u_pts = d["u"][-1]
@@ -250,27 +261,38 @@ def write_stats(data, outpath):
         Rm = u_pts[m] - 2.0 * cL
         curves = analytical_curves(c["key"], d)
         dist = nearest_curve_distance(h_pts[m], u_pts[m], curves)
+
+        lines += [sub, f"  CASE {i} / 4  --  {c['label']}", sub]
         lines += [
-            "-" * 72,
-            f"Case: {c['key']}  ({c['label']})",
-            f"  active cells (h > {H_MIN_PHASE:.0e}): {int(m.sum())} "
-            f"of {len(h_pts)}",
-            f"  R+: min={Rp.min():+.4f}, max={Rp.max():+.4f}, "
-            f"mean={Rp.mean():+.4f}, std={Rp.std():.4e}",
-            f"  R-: min={Rm.min():+.4f}, max={Rm.max():+.4f}, "
-            f"mean={Rm.mean():+.4f}, std={Rm.std():.4e}",
+            fmt("Domain length L", float(d["L"]), "m"),
+            fmt("Final time t_f", float(d["t"][-1]), "s"),
+            fmt("Grid points nx", int(d["h"].shape[1])),
+            fmt(f"Active cells (h > {H_MIN_PHASE:.0e} m)",
+                int(m.sum()), f"/ {len(h_pts)}"),
+            "",
+            "    -- Riemann invariant R+ = u + 2 sqrt(g h) --",
+            fmt("min", float(Rp.min()), "m s^-1"),
+            fmt("max", float(Rp.max()), "m s^-1"),
+            fmt("mean", float(Rp.mean()), "m s^-1"),
+            fmt("std", float(Rp.std()), "m s^-1"),
+            "",
+            "    -- Riemann invariant R- = u - 2 sqrt(g h) --",
+            fmt("min", float(Rm.min()), "m s^-1"),
+            fmt("max", float(Rm.max()), "m s^-1"),
+            fmt("mean", float(Rm.mean()), "m s^-1"),
+            fmt("std", float(Rm.std()), "m s^-1"),
         ]
         if curves:
             lines += [
-                f"  distance to nearest analytical curve in (h, u):",
-                f"    median               : {np.median(dist):.6e}",
-                f"    mean                 : {np.mean(dist):.6e}",
-                f"    max                  : {np.max(dist):.6e}",
-                f"    p95                  : "
-                f"{np.percentile(dist, 95):.6e}",
+                "",
+                "    -- distance to nearest analytical (h, u) curve --",
+                fmt("median", float(np.median(dist)), ""),
+                fmt("mean", float(np.mean(dist)), ""),
+                fmt("p95", float(np.percentile(dist, 95)), ""),
+                fmt("max", float(np.max(dist)), ""),
             ]
         lines.append("")
-    outpath.write_text("\n".join(lines))
+    outpath.write_text("\n".join(lines) + "\n")
 
 
 # ----------------------------------------------------------------------- main

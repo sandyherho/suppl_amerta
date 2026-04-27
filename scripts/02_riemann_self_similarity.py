@@ -2,9 +2,9 @@
 """Self-similarity collapse h(x, t) -> H(xi) where xi = (x - x_dam) / t.
 
 Riemann solutions on the real line are self-similar: the depth depends
-only on the similarity coordinate xi.  This script overlays h(xi) at
-several timesteps for each case and quantifies the temporal scatter
-sigma_t(h) at fixed xi.
+only on the similarity coordinate xi.  Each panel overlays h(xi) at
+several timesteps for one Riemann problem; perfect collapse manifests
+as overlapping curves.
 
 Inputs : ../data/case_*.nc
 Outputs: ../figs/02_riemann_self_similarity.{pdf,png,eps}
@@ -14,6 +14,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.lines import Line2D
 from netCDF4 import Dataset
 
 
@@ -34,9 +35,9 @@ CASES = [
      "label": "Double shock",       "color": "#d62728"},
 ]
 
-N_OVERLAY = 12      # number of t snapshots overlaid per panel
-T_MIN_FRAC = 0.05   # skip first 5% of t (xi blows up near t=0)
-N_BINS = 200        # number of xi bins for the violation panel
+N_OVERLAY = 14      # snapshots per panel
+T_MIN_FRAC = 0.05   # discard first 5% of t (xi blows up near t=0)
+N_BINS = 200        # xi bins for similarity-violation metric
 
 plt.rcParams.update({
     "font.family": "sans-serif",
@@ -63,7 +64,6 @@ def load_case(path):
 
 # ------------------------------------------------------------------- analysis
 def select_overlay_indices(t, n, t_min_frac):
-    """Return n indices of t (after skipping the first t_min_frac fraction)."""
     valid = np.where(t > t[-1] * t_min_frac)[0]
     if valid.size == 0:
         return np.array([], dtype=int)
@@ -73,11 +73,7 @@ def select_overlay_indices(t, n, t_min_frac):
 
 
 def similarity_violation(x, t, h, x_dam, n_bins, t_min_frac):
-    """Compute sigma_t(h) at fixed xi.
-
-    Bin all (x, t) samples by xi = (x - x_dam) / t and report the standard
-    deviation of h within each bin.  Bins with fewer than 2 samples are NaN.
-    """
+    """sigma_t(h) at fixed xi = (x - x_dam) / t."""
     sel = t > t[-1] * t_min_frac
     if sel.sum() == 0:
         return np.array([]), np.array([])
@@ -99,46 +95,31 @@ def similarity_violation(x, t, h, x_dam, n_bins, t_min_frac):
 
 # ------------------------------------------------------------------- plotting
 def plot_figure(data, outpath_stem):
-    fig = plt.figure(figsize=(11.0, 6.5))
+    fig = plt.figure(figsize=(10.0, 8.0))
     gs = fig.add_gridspec(
-        2, 3, left=0.07, right=0.985, top=0.97, bottom=0.10,
-        hspace=0.32, wspace=0.30,
+        2, 2, left=0.08, right=0.97, top=0.94, bottom=0.13,
+        hspace=0.42, wspace=0.28,
     )
-    axes = [
-        fig.add_subplot(gs[0, 0]),
-        fig.add_subplot(gs[0, 1]),
-        fig.add_subplot(gs[1, 0]),
-        fig.add_subplot(gs[1, 1]),
-        fig.add_subplot(gs[:, 2]),
-    ]
-    tags = ["(a)", "(b)", "(c)", "(d)", "(e)"]
+    positions = [(0, 0), (0, 1), (1, 0), (1, 1)]
+    tags = ["(a)", "(b)", "(c)", "(d)"]
 
-    for ax, tag, c in zip(axes[:4], tags[:4], CASES):
+    for tag, pos, c in zip(tags, positions, CASES):
+        ax = fig.add_subplot(gs[pos[0], pos[1]])
         d = data[c["key"]]
         x_dam = 0.5 * d["L"]
         idxs = select_overlay_indices(d["t"], N_OVERLAY, T_MIN_FRAC)
         for ii in idxs:
             xi = (d["x"] - x_dam) / d["t"][ii]
             ax.plot(xi, d["h"][ii], color=c["color"], alpha=0.45, lw=0.9)
-        ax.set_xlabel(r"$\xi = (x - x_{\mathrm{dam}})/t$ [m s$^{-1}$]")
-        ax.set_ylabel(r"$h$ [m]")
-        ax.text(0.03, 0.95, tag, transform=ax.transAxes,
-                fontsize=11, fontweight="bold", va="top")
+        ax.set_xlabel(r"$\xi = (x - x_{\mathrm{dam}})/t$  [m s$^{-1}$]")
+        ax.set_ylabel(r"$h$  [m]")
+        ax.set_title(tag, fontsize=11, fontweight="bold", pad=6)
         ax.grid(alpha=0.3)
 
-    ax = axes[4]
-    for c in CASES:
-        d = data[c["key"]]
-        xi_c, sigma = similarity_violation(
-            d["x"], d["t"], d["h"], 0.5 * d["L"], N_BINS, T_MIN_FRAC,
-        )
-        ax.plot(xi_c, sigma, color=c["color"], lw=1.1, label=c["label"])
-    ax.set_xlabel(r"$\xi$ [m s$^{-1}$]")
-    ax.set_ylabel(r"$\sigma_t(h)$ [m]")
-    ax.text(0.03, 0.95, tags[4], transform=ax.transAxes,
-            fontsize=11, fontweight="bold", va="top")
-    ax.legend(loc="upper right", fontsize=8, frameon=False)
-    ax.grid(alpha=0.3)
+    proxies = [Line2D([0], [0], color=c["color"], lw=2.2, label=c["label"])
+               for c in CASES]
+    fig.legend(handles=proxies, loc="lower center", ncol=4,
+               bbox_to_anchor=(0.5, 0.02), frameon=False, fontsize=10)
 
     for ext in ("pdf", "png", "eps"):
         fig.savefig(outpath_stem.with_suffix(f".{ext}"))
@@ -146,44 +127,78 @@ def plot_figure(data, outpath_stem):
 
 
 # ---------------------------------------------------------------------- stats
+def fmt(label, value, unit=""):
+    if isinstance(value, (int, np.integer)):
+        s = f"{int(value):>16d}"
+    elif isinstance(value, float):
+        if value != value:                          # NaN
+            s = f"{'NaN':>16}"
+        elif abs(value) >= 1e5 or (value != 0 and abs(value) < 1e-3):
+            s = f"{value:>16.6e}"
+        else:
+            s = f"{value:>16.6f}"
+    else:
+        s = f"{str(value):>16}"
+    return f"    {label:<46}{s}  {unit}".rstrip()
+
+
 def write_stats(data, outpath):
+    sep = "=" * 80
+    sub = "-" * 80
     lines = [
-        "=" * 72,
-        "Riemann self-similarity diagnostics",
-        "=" * 72,
-        f"Skipped first {T_MIN_FRAC * 100:.1f}% of timesteps",
-        f"xi bins for sigma(xi) : {N_BINS}",
-        f"Overlay snapshots/panel: {N_OVERLAY}",
+        sep,
+        "  AMERTA v0.0.3  --  Riemann self-similarity collapse",
+        sep,
+        "",
+        "  Each Riemann solution depends only on xi = (x - x_dam) / t.  This",
+        "  report quantifies temporal scatter sigma_t(h) at fixed xi: small",
+        "  values indicate near-perfect self-similar collapse.",
+        "",
+        sub,
+        "  CONFIGURATION",
+        sub,
+        fmt("Snapshots overlaid per panel", N_OVERLAY),
+        fmt("Initial fraction of t skipped",
+            T_MIN_FRAC * 100.0, "% of t_final"),
+        fmt("xi bins for sigma_t metric", N_BINS),
         "",
     ]
-    for c in CASES:
+    for i, c in enumerate(CASES, 1):
         d = data[c["key"]]
         xi_c, sigma = similarity_violation(
             d["x"], d["t"], d["h"], 0.5 * d["L"], N_BINS, T_MIN_FRAC,
         )
         ok = ~np.isnan(sigma)
+        lines += [sub, f"  CASE {i} / 4  --  {c['label']}", sub]
         if ok.sum() == 0:
-            lines += [f"Case {c['key']}: no valid bins.", ""]
+            lines += ["    no valid bins.", ""]
             continue
         dxi = xi_c[1] - xi_c[0]
         l1 = float(np.sum(sigma[ok]) * dxi)
         l2 = float(np.sqrt(np.sum(sigma[ok] ** 2) * dxi))
-        sigma_mean = float(np.mean(sigma[ok]))
         i_max = int(np.argmax(np.where(ok, sigma, -np.inf)))
+        h_mean = float(d["h"].mean())
+        quality = 1.0 - float(np.mean(sigma[ok])) / max(h_mean, 1e-12)
+
         lines += [
-            "-" * 72,
-            f"Case: {c['key']}  ({c['label']})",
-            f"  xi range                 : [{xi_c[0]:+.4f}, "
-            f"{xi_c[-1]:+.4f}] m/s",
-            f"  number of valid bins     : {int(ok.sum())} / {N_BINS}",
-            f"  mean sigma(xi)           : {sigma_mean:.6e} m",
-            f"  max sigma(xi)            : {sigma[i_max]:.6e} m",
-            f"  xi at max sigma          : {xi_c[i_max]:+.4f} m/s",
-            f"  L1 of sigma(xi)          : {l1:.6e} m * (m/s)",
-            f"  L2 of sigma(xi)          : {l2:.6e} m * sqrt(m/s)",
+            fmt("Domain length L", float(d["L"]), "m"),
+            fmt("Final time t_f", float(d["t"][-1]), "s"),
+            fmt("Grid points nx", int(d["h"].shape[1])),
+            fmt("Number of valid xi bins",
+                int(ok.sum()), f"/ {N_BINS}"),
+            fmt("xi range (min)", float(xi_c[0]), "m s^-1"),
+            fmt("xi range (max)", float(xi_c[-1]), "m s^-1"),
+            "",
+            "    -- self-similarity violation sigma_t(h) --",
+            fmt("mean over xi", float(np.mean(sigma[ok])), "m"),
+            fmt("max over xi", float(sigma[i_max]), "m"),
+            fmt("xi at max sigma", float(xi_c[i_max]), "m s^-1"),
+            fmt("L1 of sigma over xi", l1, "m * (m s^-1)"),
+            fmt("L2 of sigma over xi", l2, "m * sqrt(m s^-1)"),
+            fmt("similarity quality 1 - <sigma>/<h>", quality, ""),
             "",
         ]
-    outpath.write_text("\n".join(lines))
+    outpath.write_text("\n".join(lines) + "\n")
 
 
 # ----------------------------------------------------------------------- main

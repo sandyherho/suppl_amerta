@@ -1,16 +1,16 @@
 #!/usr/bin/env python
-"""Conservation invariants, TVD property, and symmetry preservation.
+"""Conservation invariants and TVD property of the discrete solution.
 
-Verifies the discrete solution against the four physical invariants of
-the homogeneous shallow-water Riemann problem under the simulator's
-Neumann (zero-gradient) boundary conditions:
+Each panel overlays all four Riemann problems for a single diagnostic:
 
-  - mass closure including BC throughflow,
-  - non-negative shock-only energy dissipation rate,
-  - non-increasing total variation of h (TVD property),
-  - center-of-mass invariance for symmetric ICs.
+  (a) BC-corrected mass closure residual,
+  (b) total energy dissipation rate dE/dt,
+  (c) total variation of h relative to its initial value,
+  (d) maximum Froude number versus time.
 
-The peak Froude number trajectory is included as a flow-regime probe.
+The center-of-mass symmetry probe (cases 3 and 4 only) is reported in
+the stats file rather than in the figure, since it does not apply to
+the asymmetric cases 1 and 2.
 
 Inputs : ../data/case_*.nc
 Outputs: ../figs/04_invariants_tvd_symmetry.{pdf,png,eps}
@@ -20,6 +20,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.lines import Line2D
 from netCDF4 import Dataset
 
 
@@ -58,59 +59,51 @@ def load_case(path):
         raise FileNotFoundError(f"NetCDF file not found: {path}")
     with Dataset(path, "r") as nc:
         return {
-            "x":         np.asarray(nc.variables["x"][:]),
-            "t":         np.asarray(nc.variables["time"][:]),
-            "h":         np.asarray(nc.variables["h"][:]),
-            "q":         np.asarray(nc.variables["q"][:]),
-            "mass":      np.asarray(nc.variables["mass_integral"][:]),
-            "energy":    np.asarray(nc.variables["energy_integral"][:]),
-            "froude":    np.asarray(nc.variables["froude_max"][:]),
-            "L":         float(nc.L),
+            "x":      np.asarray(nc.variables["x"][:]),
+            "t":      np.asarray(nc.variables["time"][:]),
+            "h":      np.asarray(nc.variables["h"][:]),
+            "q":      np.asarray(nc.variables["q"][:]),
+            "mass":   np.asarray(nc.variables["mass_integral"][:]),
+            "energy": np.asarray(nc.variables["energy_integral"][:]),
+            "froude": np.asarray(nc.variables["froude_max"][:]),
+            "L":      float(nc.L),
         }
 
 
 # ------------------------------------------------------------------- analysis
 def cumulative_bc_flux(t, q):
-    """Cumulative net mass that has crossed the boundaries (m^2).
-
-    Net inflow = q[:, 0] - q[:, -1]   (positive = mass entering domain).
-    Integrated by the trapezoid rule.
-    """
+    """Cumulative net mass that crossed the boundaries (m^2)."""
     q_in = q[:, 0] - q[:, -1]
-    return np.concatenate(([0.0], np.cumsum(0.5 * (q_in[1:] + q_in[:-1])
-                                            * np.diff(t))))
+    return np.concatenate(
+        ([0.0], np.cumsum(0.5 * (q_in[1:] + q_in[:-1]) * np.diff(t))))
 
 
 def total_variation(h):
-    """TV(h)(t) = sum_i |h_{i+1} - h_i|."""
     return np.sum(np.abs(np.diff(h, axis=1)), axis=1)
 
 
 def center_of_mass(x, h, dx):
-    """<x>(t) = sum(x * h) * dx / sum(h * dx)."""
     num = np.sum(h * x[None, :], axis=1) * dx
     den = np.sum(h, axis=1) * dx
     return num / den
 
 
 def energy_rate(t, e):
-    """dE/dt via central differences (np.gradient)."""
     return np.gradient(e, t)
 
 
 # ------------------------------------------------------------------- plotting
 def plot_figure(data, outpath_stem):
-    fig = plt.figure(figsize=(11.0, 7.5))
+    fig = plt.figure(figsize=(10.0, 8.0))
     gs = fig.add_gridspec(
-        2, 3, left=0.07, right=0.985, top=0.97, bottom=0.08,
-        hspace=0.32, wspace=0.30,
+        2, 2, left=0.10, right=0.97, top=0.94, bottom=0.13,
+        hspace=0.42, wspace=0.32,
     )
     axes = [fig.add_subplot(gs[0, 0]),
             fig.add_subplot(gs[0, 1]),
-            fig.add_subplot(gs[0, 2]),
             fig.add_subplot(gs[1, 0]),
             fig.add_subplot(gs[1, 1])]
-    tags = ["(a)", "(b)", "(c)", "(d)", "(e)"]
+    tags = ["(a)", "(b)", "(c)", "(d)"]
 
     # (a) BC-corrected mass closure
     ax = axes[0]
@@ -118,73 +111,47 @@ def plot_figure(data, outpath_stem):
         d = data[c["key"]]
         flux = cumulative_bc_flux(d["t"], d["q"])
         residual = (d["mass"] - d["mass"][0]) - flux
-        ax.plot(d["t"], residual, color=c["color"], label=c["label"])
+        ax.plot(d["t"], residual, color=c["color"])
     ax.axhline(0.0, color="k", lw=0.6, ls=":")
-    ax.set_xlabel("t [s]")
+    ax.set_xlabel(r"$t$  [s]")
     ax.set_ylabel(r"$M(t)-M(0)-\!\int q_{\mathrm{BC}}\,ds$  [m$^2$]")
-    ax.text(0.03, 0.95, tags[0], transform=ax.transAxes,
-            fontsize=11, fontweight="bold", va="top")
-    ax.legend(loc="best", fontsize=7, frameon=False)
-    ax.grid(alpha=0.3)
 
     # (b) energy dissipation rate
     ax = axes[1]
     for c in CASES:
         d = data[c["key"]]
-        ax.plot(d["t"], energy_rate(d["t"], d["energy"]),
-                color=c["color"], label=c["label"])
+        ax.plot(d["t"], energy_rate(d["t"], d["energy"]), color=c["color"])
     ax.axhline(0.0, color="k", lw=0.6, ls=":")
-    ax.set_xlabel("t [s]")
-    ax.set_ylabel(r"$dE/dt$ [m$^3$ s$^{-3}$]")
-    ax.text(0.03, 0.95, tags[1], transform=ax.transAxes,
-            fontsize=11, fontweight="bold", va="top")
-    ax.legend(loc="best", fontsize=7, frameon=False)
-    ax.grid(alpha=0.3)
+    ax.set_xlabel(r"$t$  [s]")
+    ax.set_ylabel(r"$dE/dt$  [m$^3$ s$^{-3}$]")
 
     # (c) total variation
     ax = axes[2]
     for c in CASES:
         d = data[c["key"]]
         tv = total_variation(d["h"])
-        ax.plot(d["t"], tv - tv[0], color=c["color"], label=c["label"])
+        ax.plot(d["t"], tv - tv[0], color=c["color"])
     ax.axhline(0.0, color="k", lw=0.6, ls=":")
-    ax.set_xlabel("t [s]")
-    ax.set_ylabel(r"$\mathrm{TV}(h)(t) - \mathrm{TV}(h)(0)$ [m]")
-    ax.text(0.03, 0.95, tags[2], transform=ax.transAxes,
-            fontsize=11, fontweight="bold", va="top")
-    ax.legend(loc="best", fontsize=7, frameon=False)
-    ax.grid(alpha=0.3)
+    ax.set_xlabel(r"$t$  [s]")
+    ax.set_ylabel(r"$\mathrm{TV}(h)(t) - \mathrm{TV}(h)(0)$  [m]")
 
-    # (d) center of mass for symmetric cases
+    # (d) max Froude
     ax = axes[3]
     for c in CASES:
-        if c["key"] not in SYMMETRIC_KEYS:
-            continue
         d = data[c["key"]]
-        dx = d["x"][1] - d["x"][0]
-        com = center_of_mass(d["x"], d["h"], dx)
-        ax.plot(d["t"], com - 0.5 * d["L"],
-                color=c["color"], label=c["label"])
-    ax.axhline(0.0, color="k", lw=0.6, ls=":")
-    ax.set_xlabel("t [s]")
-    ax.set_ylabel(r"$\langle x \rangle(t) - L/2$ [m]")
-    ax.text(0.03, 0.95, tags[3], transform=ax.transAxes,
-            fontsize=11, fontweight="bold", va="top")
-    ax.legend(loc="best", fontsize=8, frameon=False)
-    ax.grid(alpha=0.3)
-
-    # (e) max Froude
-    ax = axes[4]
-    for c in CASES:
-        d = data[c["key"]]
-        ax.plot(d["t"], d["froude"], color=c["color"], label=c["label"])
+        ax.plot(d["t"], d["froude"], color=c["color"])
     ax.axhline(1.0, color="k", lw=0.6, ls=":")
-    ax.set_xlabel("t [s]")
+    ax.set_xlabel(r"$t$  [s]")
     ax.set_ylabel(r"$\max_x \mathrm{Fr}(t)$")
-    ax.text(0.03, 0.95, tags[4], transform=ax.transAxes,
-            fontsize=11, fontweight="bold", va="top")
-    ax.legend(loc="best", fontsize=7, frameon=False)
-    ax.grid(alpha=0.3)
+
+    for ax, tag in zip(axes, tags):
+        ax.set_title(tag, fontsize=11, fontweight="bold", pad=6)
+        ax.grid(alpha=0.3)
+
+    proxies = [Line2D([0], [0], color=c["color"], lw=2.2, label=c["label"])
+               for c in CASES]
+    fig.legend(handles=proxies, loc="lower center", ncol=4,
+               bbox_to_anchor=(0.5, 0.02), frameon=False, fontsize=10)
 
     for ext in ("pdf", "png", "eps"):
         fig.savefig(outpath_stem.with_suffix(f".{ext}"))
@@ -192,18 +159,38 @@ def plot_figure(data, outpath_stem):
 
 
 # ---------------------------------------------------------------------- stats
+def fmt(label, value, unit=""):
+    if isinstance(value, (int, np.integer)):
+        s = f"{int(value):>16d}"
+    elif isinstance(value, float):
+        if value != value:
+            s = f"{'NaN':>16}"
+        elif abs(value) >= 1e5 or (value != 0 and abs(value) < 1e-3):
+            s = f"{value:>16.6e}"
+        else:
+            s = f"{value:>16.6f}"
+    else:
+        s = f"{str(value):>16}"
+    return f"    {label:<46}{s}  {unit}".rstrip()
+
+
 def write_stats(data, outpath):
+    sep = "=" * 80
+    sub = "-" * 80
     lines = [
-        "=" * 72,
-        "Invariants, TVD property, and symmetry diagnostics",
-        "=" * 72,
-        "Mass closure metric : residual = M(t) - M(0) - integral(q[0]-q[-1]) "
-        "dt",
-        "TVD metric          : TV(h)(t) = sum_i |h_{i+1} - h_i|",
-        "Symmetry probe      : <x>(t) for symmetric ICs (cases 3, 4)",
+        sep,
+        "  AMERTA v0.0.3  --  Invariants, TVD property, and symmetry",
+        sep,
         "",
+        "  Mass closure  : residual = M(t) - M(0) - integral_0^t (q_0 - q_N) ds",
+        "  TVD property  : TV(h)(t) = sum_i |h_{i+1} - h_i| should not grow",
+        "  Symmetry probe: <x>(t) - L/2 must remain near zero for cases 3 & 4",
+        "",
+        sub,
+        "  PER-CASE DIAGNOSTICS",
+        sub,
     ]
-    for c in CASES:
+    for i, c in enumerate(CASES, 1):
         d = data[c["key"]]
         flux = cumulative_bc_flux(d["t"], d["q"])
         residual = (d["mass"] - d["mass"][0]) - flux
@@ -211,39 +198,55 @@ def write_stats(data, outpath):
         tv = total_variation(d["h"])
         dx = d["x"][1] - d["x"][0]
 
+        lines += [sub, f"  CASE {i} / 4  --  {c['label']}", sub]
         lines += [
-            "-" * 72,
-            f"Case: {c['key']}  ({c['label']})",
-            f"  M(0)                       : {d['mass'][0]:.6e} m^2",
-            f"  M(t_final)                 : {d['mass'][-1]:.6e} m^2",
-            f"  cumulative BC flux at end  : {flux[-1]:+.6e} m^2",
-            f"  mass-closure residual max  : {np.max(np.abs(residual)):.6e}"
-            " m^2",
-            f"  mass-closure / M(0)        : "
-            f"{np.max(np.abs(residual)) / d['mass'][0]:.6e}",
-            f"  E(0)                       : {d['energy'][0]:.6e} m^3/s^2",
-            f"  E(t_final)                 : {d['energy'][-1]:.6e} m^3/s^2",
-            f"  energy dissipated          : "
-            f"{(d['energy'][0] - d['energy'][-1]):.6e} m^3/s^2",
-            f"  min dE/dt                  : {de_dt.min():+.6e}",
-            f"  max dE/dt                  : {de_dt.max():+.6e}",
-            f"  TV(h)(0)                   : {tv[0]:.6e} m",
-            f"  TV(h)(t_final)             : {tv[-1]:.6e} m",
-            f"  max TV(h)(t) - TV(h)(0)    : {(tv - tv[0]).max():+.6e} m",
-            f"  peak Froude                : {np.nanmax(d['froude']):.6f}",
-            f"  Froude > 1 fraction of t   : "
-            f"{(d['froude'] > 1.0).sum() / len(d['froude']):.4f}",
+            fmt("Domain length L", float(d["L"]), "m"),
+            fmt("Final time t_f", float(d["t"][-1]), "s"),
+            fmt("Grid points nx", int(d["h"].shape[1])),
+            "",
+            "    -- mass conservation --",
+            fmt("M(0)", float(d["mass"][0]), "m^2"),
+            fmt("M(t_f)", float(d["mass"][-1]), "m^2"),
+            fmt("cumulative BC flux at t_f",
+                float(flux[-1]), "m^2"),
+            fmt("max |residual|",
+                float(np.max(np.abs(residual))), "m^2"),
+            fmt("max |residual| / M(0)",
+                float(np.max(np.abs(residual)) / d["mass"][0]), ""),
+            "",
+            "    -- energy dissipation --",
+            fmt("E(0)", float(d["energy"][0]), "m^3 s^-2"),
+            fmt("E(t_f)", float(d["energy"][-1]), "m^3 s^-2"),
+            fmt("E dissipated",
+                float(d["energy"][0] - d["energy"][-1]), "m^3 s^-2"),
+            fmt("min dE/dt", float(de_dt.min()), "m^3 s^-3"),
+            fmt("max dE/dt", float(de_dt.max()), "m^3 s^-3"),
+            "",
+            "    -- total variation --",
+            fmt("TV(h)(0)", float(tv[0]), "m"),
+            fmt("TV(h)(t_f)", float(tv[-1]), "m"),
+            fmt("max TV(h) growth above TV(h)(0)",
+                float((tv - tv[0]).max()), "m"),
+            "",
+            "    -- Froude number --",
+            fmt("peak max-Froude over t",
+                float(np.nanmax(d["froude"])), ""),
+            fmt("supercritical fraction of t",
+                float((d["froude"] > 1.0).sum() / len(d["froude"])), ""),
         ]
         if c["key"] in SYMMETRIC_KEYS:
             com = center_of_mass(d["x"], d["h"], dx)
             dev = com - 0.5 * d["L"]
             lines += [
-                f"  <x>(0) - L/2               : {dev[0]:+.6e} m",
-                f"  max |<x> - L/2|            : {np.max(np.abs(dev)):.6e} m",
-                f"  std(<x> - L/2)             : {np.std(dev):.6e} m",
+                "",
+                "    -- symmetry probe (symmetric IC only) --",
+                fmt("<x>(0) - L/2", float(dev[0]), "m"),
+                fmt("max |<x>(t) - L/2|",
+                    float(np.max(np.abs(dev))), "m"),
+                fmt("std(<x>(t) - L/2)", float(np.std(dev)), "m"),
             ]
         lines.append("")
-    outpath.write_text("\n".join(lines))
+    outpath.write_text("\n".join(lines) + "\n")
 
 
 # ----------------------------------------------------------------------- main
